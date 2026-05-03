@@ -17,11 +17,25 @@ const {
 const fs = require('fs');
 
 const cargosPermitidos = ['👑 Dono', '💰 Vendedor', '🔥 Top Vendedor'];
+
 const categoriaTicketsNome = 'Tickets';
 const canalLogsNome = 'logs-tickets';
+const canalFeedbacksNome = '✅・feedback';
+
+const chavePix = '48412796870';
+const nomePix = 'Enzo Passini Liciardi';
 
 const bannerLink = 'https://cdn.discordapp.com/attachments/1500256907502289088/1500459832556130384/ChatGPT_Image_2_de_mai._de_2026_19_33_06.png?ex=69f8839d&is=69f7321d&hm=dddc5d65a5f16661ab7121a70f7e80cec6f9e3ffc62e799dd222b159156552f2&';
 const logoLink = 'https://cdn.discordapp.com/attachments/1500256907502289088/1500459833139265647/ChatGPT_Image_23_de_abr._de_2026_15_51_41.png?ex=69f8839d&is=69f7321d&hm=00bef1352a516c82b15174b3577cc905f9369f9229aca68b1b7441dffff07d6d&';
+
+const produtos = {
+  camiseta: { nome: '👕 Camiseta', preco: 29.99 },
+  calca: { nome: '👖 Calça', preco: 29.99 },
+  shorts: { nome: '🩳 Shorts', preco: 25.00 },
+  cordao: { nome: '📿 Cordão', preco: 29.99 },
+  manguito: { nome: '🧤 Manguito', preco: 25.00 },
+  kit_fac: { nome: '🔥 Kit FAC', preco: 569.99 }
+};
 
 let db = { ticketCount: 0, tickets: {} };
 
@@ -33,8 +47,20 @@ function salvarDB() {
   fs.writeFileSync('./database.json', JSON.stringify(db, null, 2));
 }
 
+function normalizar(texto) {
+  return texto.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function acharCanal(guild, nome) {
+  return guild.channels.cache.find(c => normalizar(c.name) === normalizar(nome));
+}
+
 function temCargoPermitido(membro) {
   return membro.roles.cache.some(role => cargosPermitidos.includes(role.name));
+}
+
+function formatarDinheiro(valor) {
+  return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
 function formatarTempo(ms) {
@@ -84,23 +110,13 @@ client.on('messageCreate', async (message) => {
         .setCustomId('categoria_ticket')
         .setPlaceholder('Escolha a categoria')
         .addOptions([
-          {
-            label: '👕 Roupas',
-            description: 'Pedidos e personalizados',
-            value: 'roupas'
-          },
-          {
-            label: '🛠️ Suporte',
-            description: 'Dúvidas e ajuda',
-            value: 'suporte'
-          }
+          { label: '👕 Roupas', description: 'Pedidos e personalizados', value: 'roupas' },
+          { label: '🛠️ Suporte', description: 'Dúvidas e ajuda', value: 'suporte' }
         ]);
-
-      const row = new ActionRowBuilder().addComponents(menu);
 
       return message.channel.send({
         embeds: [embed],
-        components: [row]
+        components: [new ActionRowBuilder().addComponents(menu)]
       });
     }
   } catch (erro) {
@@ -110,7 +126,9 @@ client.on('messageCreate', async (message) => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
+
     if (interaction.isStringSelectMenu() && interaction.customId === 'categoria_ticket') {
+
       const categoria = interaction.values[0];
 
       const modal = new ModalBuilder()
@@ -129,6 +147,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('form_ticket_')) {
+
       await interaction.deferReply({ ephemeral: true });
 
       const texto = interaction.fields.getTextInputValue('mensagem');
@@ -136,13 +155,14 @@ client.on('interactionCreate', async (interaction) => {
 
       db.ticketCount++;
       const ticketId = db.ticketCount;
+
       salvarDB();
 
       const categoriaTickets = interaction.guild.channels.cache.find(
-        canal => canal.name === categoriaTicketsNome && canal.type === ChannelType.GuildCategory
+        canal =>
+          normalizar(canal.name) === normalizar(categoriaTicketsNome) &&
+          canal.type === ChannelType.GuildCategory
       );
-
-      const corCategoria = categoria === 'roupas' ? '#8A2BE2' : '#808080';
 
       const canal = await interaction.guild.channels.create({
         name: `ticket-${ticketId}-${categoria}`,
@@ -193,10 +213,13 @@ client.on('interactionCreate', async (interaction) => {
         usuarioTag: interaction.user.tag,
         mensagemInicial: texto,
         abertoEm: Date.now(),
-        assumidoPor: null
+        assumidoPor: null,
+        pagamento: null
       };
 
       salvarDB();
+
+      const corCategoria = categoria === 'roupas' ? '#8A2BE2' : '#808080';
 
       const embed = new EmbedBuilder()
         .setTitle(`🎫 Ticket #${ticketId}`)
@@ -214,25 +237,35 @@ client.on('interactionCreate', async (interaction) => {
         .setLabel('👨‍💼 Assumir Ticket')
         .setStyle(ButtonStyle.Primary);
 
+      const pagamento = new ButtonBuilder()
+        .setCustomId('gerar_pagamento')
+        .setLabel('💳 Gerar Pagamento')
+        .setStyle(ButtonStyle.Success);
+
       const fechar = new ButtonBuilder()
         .setCustomId('fechar_ticket')
         .setLabel('🔒 Finalizar Ticket')
         .setStyle(ButtonStyle.Danger);
 
-      const botoes = new ActionRowBuilder().addComponents(assumir, fechar);
-
       await canal.send({
         content: `<@${interaction.user.id}>`,
         embeds: [embed],
-        components: [botoes]
+        components: [
+          new ActionRowBuilder().addComponents(
+            assumir,
+            pagamento,
+            fechar
+          )
+        ]
       });
 
-      return interaction.editReply({
-        content: `✅ Ticket criado com sucesso: ${canal}`
-      });
+      return interaction.editReply(
+        `✅ Ticket criado com sucesso: ${canal}`
+      );
     }
 
     if (interaction.isButton() && interaction.customId === 'assumir_ticket') {
+
       if (!temCargoPermitido(interaction.member)) {
         return interaction.reply({
           content: '❌ Você não tem permissão para assumir este ticket.',
@@ -252,7 +285,337 @@ client.on('interactionCreate', async (interaction) => {
       });
     }
 
+    if (interaction.isButton() && interaction.customId === 'gerar_pagamento') {
+
+      if (!temCargoPermitido(interaction.member)) {
+        return interaction.reply({
+          content: '❌ Você não tem permissão para gerar pagamento.',
+          ephemeral: true
+        });
+      }
+
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('selecionar_produto')
+        .setPlaceholder('Escolha o produto do pedido')
+        .addOptions([
+          { label: '👕 Camiseta — R$ 29,99', value: 'camiseta' },
+          { label: '👖 Calça — R$ 29,99', value: 'calca' },
+          { label: '🩳 Shorts — R$ 25,00', value: 'shorts' },
+          { label: '📿 Cordão — R$ 29,99', value: 'cordao' },
+          { label: '🧤 Manguito — R$ 25,00', value: 'manguito' },
+          { label: '🔥 Kit FAC — R$ 569,99', value: 'kit_fac' }
+        ]);
+
+      return interaction.reply({
+        content: '🛒 Escolha o produto para gerar o pagamento:',
+        components: [
+          new ActionRowBuilder().addComponents(menu)
+        ],
+        ephemeral: true
+      });
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === 'selecionar_produto') {
+
+      if (!temCargoPermitido(interaction.member)) {
+        return interaction.reply({
+          content: '❌ Sem permissão.',
+          ephemeral: true
+        });
+      }
+
+      const produtoId = interaction.values[0];
+
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_quantidade_${produtoId}`)
+        .setTitle('Quantidade do pedido');
+
+      const input = new TextInputBuilder()
+        .setCustomId('quantidade')
+        .setLabel('Quantidade (1 até 50)')
+        .setPlaceholder('Exemplo: 1')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(input)
+      );
+
+      return interaction.showModal(modal);
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_quantidade_')) {
+
+      await interaction.deferReply({ ephemeral: true });
+
+      if (!temCargoPermitido(interaction.member)) {
+        return interaction.editReply('❌ Sem permissão.');
+      }
+
+      const produtoId = interaction.customId.replace('modal_quantidade_', '');
+      const quantidade = Number(
+        interaction.fields.getTextInputValue('quantidade')
+      );
+
+      if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 50) {
+        return interaction.editReply(
+          '❌ A quantidade precisa ser um número de 1 até 50.'
+        );
+      }
+
+      const produto = produtos[produtoId];
+      const total = produto.preco * quantidade;
+
+      const dados = db.tickets[interaction.channel.id];
+
+      if (dados) {
+        dados.pagamento = {
+          produto: produto.nome,
+          quantidade,
+          total,
+          status: 'Aguardando pagamento'
+        };
+
+        salvarDB();
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle('💳 Pagamento Gerado')
+        .setDescription(
+          `🛒 **Produto:** ${produto.nome}\n` +
+          `🔢 **Quantidade:** ${quantidade}\n` +
+          `💰 **Valor total:** ${formatarDinheiro(total)}\n\n` +
+          `👤 **Nome no Pix:** ${nomePix}\n` +
+          `🔑 **Chave Pix:**\n\`\`\`${chavePix}\`\`\`\n` +
+          `🟡 **Status:** Aguardando pagamento\n\n` +
+          `Depois de pagar, clique em **✅ Já paguei**.`
+        )
+        .setColor('#8A2BE2')
+        .setThumbnail(logoLink);
+
+      const copiar = new ButtonBuilder()
+        .setCustomId('copiar_pix')
+        .setLabel('📋 Ver chave Pix')
+        .setStyle(ButtonStyle.Secondary);
+
+      const jaPaguei = new ButtonBuilder()
+        .setCustomId('ja_paguei')
+        .setLabel('✅ Já paguei')
+        .setStyle(ButtonStyle.Success);
+
+      const confirmar = new ButtonBuilder()
+        .setCustomId('confirmar_pagamento')
+        .setLabel('🟢 Confirmar Pagamento')
+        .setStyle(ButtonStyle.Primary);
+
+      await interaction.channel.send({
+        embeds: [embed],
+        components: [
+          new ActionRowBuilder().addComponents(
+            copiar,
+            jaPaguei,
+            confirmar
+          )
+        ]
+      });
+
+      return interaction.editReply(
+        '✅ Pagamento enviado no ticket.'
+      );
+    }
+
+    if (interaction.isButton() && interaction.customId === 'copiar_pix') {
+
+      return interaction.reply({
+        content:
+          `🔑 **Chave Pix:**\n\`\`\`${chavePix}\`\`\`\n` +
+          `👤 Nome: **${nomePix}**`,
+        ephemeral: true
+      });
+    }
+
+    if (interaction.isButton() && interaction.customId === 'ja_paguei') {
+
+      const dados = db.tickets[interaction.channel.id];
+
+      if (dados && interaction.user.id !== dados.usuarioId) {
+        return interaction.reply({
+          content: '❌ Apenas o cliente do ticket pode marcar como pago.',
+          ephemeral: true
+        });
+      }
+
+      if (dados && dados.pagamento) {
+        dados.pagamento.status = 'Aguardando verificação';
+        salvarDB();
+      }
+
+      return interaction.reply({
+        content:
+          '🟡 Pagamento marcado como enviado. Aguardando verificação da equipe.'
+      });
+    }
+
+    if (interaction.isButton() && interaction.customId === 'confirmar_pagamento') {
+
+      if (!temCargoPermitido(interaction.member)) {
+        return interaction.reply({
+          content: '❌ Você não tem permissão para confirmar pagamento.',
+          ephemeral: true
+        });
+      }
+
+      const dados = db.tickets[interaction.channel.id];
+
+      if (dados && dados.pagamento) {
+        dados.pagamento.status = 'Pagamento confirmado';
+        salvarDB();
+      }
+
+      const producao = new ButtonBuilder()
+        .setCustomId('em_producao')
+        .setLabel('🔵 Em Produção')
+        .setStyle(ButtonStyle.Primary);
+
+      return interaction.reply({
+        content:
+          `🟢 Pagamento confirmado por ${interaction.user}.\n` +
+          `Pedido pronto para ir para produção.`,
+        components: [
+          new ActionRowBuilder().addComponents(producao)
+        ]
+      });
+    }
+
+    if (interaction.isButton() && interaction.customId === 'em_producao') {
+
+      if (!temCargoPermitido(interaction.member)) {
+        return interaction.reply({
+          content: '❌ Sem permissão.',
+          ephemeral: true
+        });
+      }
+
+      const entregue = new ButtonBuilder()
+        .setCustomId('pedido_entregue')
+        .setLabel('✅ Pedido Entregue')
+        .setStyle(ButtonStyle.Success);
+
+      return interaction.reply({
+        content:
+          `🔵 Pedido colocado em produção por ${interaction.user}.`,
+        components: [
+          new ActionRowBuilder().addComponents(entregue)
+        ]
+      });
+    }
+
+    if (interaction.isButton() && interaction.customId === 'pedido_entregue') {
+
+      if (!temCargoPermitido(interaction.member)) {
+        return interaction.reply({
+          content: '❌ Sem permissão.',
+          ephemeral: true
+        });
+      }
+
+      const avaliar = new ButtonBuilder()
+        .setCustomId('avaliar_atendimento')
+        .setLabel('⭐ Avaliar Atendimento')
+        .setStyle(ButtonStyle.Success);
+
+      return interaction.reply({
+        content:
+          '✅ Pedido entregue! Cliente, clique abaixo para avaliar o atendimento.',
+        components: [
+          new ActionRowBuilder().addComponents(avaliar)
+        ]
+      });
+    }
+
+    if (interaction.isButton() && interaction.customId === 'avaliar_atendimento') {
+
+      const dados = db.tickets[interaction.channel.id];
+
+      if (dados && interaction.user.id !== dados.usuarioId) {
+        return interaction.reply({
+          content: '❌ Apenas o cliente pode avaliar.',
+          ephemeral: true
+        });
+      }
+
+      const modal = new ModalBuilder()
+        .setCustomId('modal_avaliacao')
+        .setTitle('Avaliar Atendimento');
+
+      const estrelas = new TextInputBuilder()
+        .setCustomId('estrelas')
+        .setLabel('Quantas estrelas? (1 a 5)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      const feedback = new TextInputBuilder()
+        .setCustomId('feedback')
+        .setLabel('Escreva seu feedback')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(estrelas),
+        new ActionRowBuilder().addComponents(feedback)
+      );
+
+      return interaction.showModal(modal);
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === 'modal_avaliacao') {
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const estrelas = interaction.fields.getTextInputValue('estrelas');
+      const feedback = interaction.fields.getTextInputValue('feedback');
+
+      const numeroEstrelas = Number(estrelas);
+
+      if (!Number.isInteger(numeroEstrelas) || numeroEstrelas < 1 || numeroEstrelas > 5) {
+        return interaction.editReply(
+          '❌ Coloque uma nota de 1 até 5.'
+        );
+      }
+
+      const dados = db.tickets[interaction.channel.id];
+
+      const canalFeedbacks = acharCanal(
+        interaction.guild,
+        canalFeedbacksNome
+      );
+
+      if (canalFeedbacks) {
+
+        const embed = new EmbedBuilder()
+          .setTitle('✅ Novo Feedback')
+          .setDescription(
+            `👤 **Cliente:** ${interaction.user}\n` +
+            `🎫 **Ticket:** #${dados ? dados.id : 'sem-id'}\n` +
+            `⭐ **Nota:** ${'⭐'.repeat(numeroEstrelas)}\n\n` +
+            `💬 **Feedback:**\n${feedback}`
+          )
+          .setColor('#00FF00')
+          .setThumbnail(logoLink)
+          .setTimestamp();
+
+        await canalFeedbacks.send({
+          embeds: [embed]
+        });
+      }
+
+      return interaction.editReply(
+        '✅ Obrigado pelo feedback!'
+      );
+    }
+
     if (interaction.isButton() && interaction.customId === 'fechar_ticket') {
+
       if (!temCargoPermitido(interaction.member)) {
         return interaction.reply({
           content: '❌ Você não tem permissão para finalizar este ticket.',
@@ -264,7 +627,9 @@ client.on('interactionCreate', async (interaction) => {
 
       const dados = db.tickets[interaction.channel.id];
 
-      const mensagens = await interaction.channel.messages.fetch({ limit: 100 });
+      const mensagens = await interaction.channel.messages.fetch({
+        limit: 100
+      });
 
       const historico = mensagens
         .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
@@ -277,18 +642,22 @@ client.on('interactionCreate', async (interaction) => {
 
       const arquivo = new AttachmentBuilder(
         Buffer.from(historico || 'Sem mensagens salvas.', 'utf8'),
-        { name: `historico-ticket-${dados ? dados.id : 'sem-id'}.txt` }
+        {
+          name: `historico-ticket-${dados ? dados.id : 'sem-id'}.txt`
+        }
       );
 
       const tempoAtendimento = dados
         ? formatarTempo(Date.now() - dados.abertoEm)
         : 'Não registrado';
 
-      const logChannel = interaction.guild.channels.cache.find(
-        canal => canal.name === canalLogsNome && canal.type === ChannelType.GuildText
+      const logChannel = acharCanal(
+        interaction.guild,
+        canalLogsNome
       );
 
       if (logChannel) {
+
         const logEmbed = new EmbedBuilder()
           .setTitle(`📁 Ticket Finalizado #${dados ? dados.id : 'sem-id'}`)
           .setDescription(
@@ -299,7 +668,11 @@ client.on('interactionCreate', async (interaction) => {
             `⏱️ **Tempo de atendimento:** ${tempoAtendimento}\n\n` +
             `📩 **Mensagem inicial:**\n${dados ? dados.mensagemInicial : 'Não registrada'}`
           )
-          .setColor(dados && dados.categoria === 'roupas' ? '#8A2BE2' : '#808080')
+          .setColor(
+            dados && dados.categoria === 'roupas'
+              ? '#8A2BE2'
+              : '#808080'
+          )
           .setThumbnail(logoLink)
           .setTimestamp();
 
@@ -309,7 +682,9 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      await interaction.editReply('🔒 Ticket finalizado. O canal será deletado em 3 segundos.');
+      await interaction.editReply(
+        '🔒 Ticket finalizado. O canal será deletado em 3 segundos.'
+      );
 
       if (dados) {
         delete db.tickets[interaction.channel.id];
@@ -320,13 +695,21 @@ client.on('interactionCreate', async (interaction) => {
         interaction.channel.delete().catch(() => {});
       }, 3000);
     }
+
   } catch (erro) {
+
     console.log('Erro em interação:', erro);
 
     if (interaction.isRepliable()) {
+
       if (interaction.deferred || interaction.replied) {
-        interaction.editReply('❌ Ocorreu um erro ao processar isso.').catch(() => {});
+
+        interaction.editReply(
+          '❌ Ocorreu um erro ao processar isso.'
+        ).catch(() => {});
+
       } else {
+
         interaction.reply({
           content: '❌ Ocorreu um erro ao processar isso.',
           ephemeral: true
@@ -337,4 +720,3 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(process.env.TOKEN);
-
