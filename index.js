@@ -15,6 +15,7 @@ const {
 } = require('discord.js');
 
 const fs = require('fs');
+const QRCode = require('qrcode');
 
 const cargosPermitidos = ['👑 Dono', '💰 Vendedor', '🔥 Top Vendedor'];
 
@@ -73,6 +74,51 @@ function formatarTempo(ms) {
   return `${segundos}s`;
 }
 
+function crc16(payload) {
+  let crc = 0xFFFF;
+
+  for (let i = 0; i < payload.length; i++) {
+    crc ^= payload.charCodeAt(i) << 8;
+
+    for (let j = 0; j < 8; j++) {
+      if ((crc & 0x8000) !== 0) {
+        crc = (crc << 1) ^ 0x1021;
+      } else {
+        crc <<= 1;
+      }
+
+      crc &= 0xFFFF;
+    }
+  }
+
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+function campo(id, valor) {
+  const tamanho = valor.length.toString().padStart(2, '0');
+  return `${id}${tamanho}${valor}`;
+}
+
+function gerarPixCopiaECola({ chave, nome, cidade, valor, txid }) {
+  const merchantAccountInfo =
+    campo('00', 'BR.GOV.BCB.PIX') +
+    campo('01', chave);
+
+  const payloadSemCRC =
+    campo('00', '01') +
+    campo('26', merchantAccountInfo) +
+    campo('52', '0000') +
+    campo('53', '986') +
+    campo('54', valor.toFixed(2)) +
+    campo('58', 'BR') +
+    campo('59', nome.substring(0, 25)) +
+    campo('60', cidade.substring(0, 15)) +
+    campo('62', campo('05', txid.substring(0, 25))) +
+    '6304';
+
+  return payloadSemCRC + crc16(payloadSemCRC);
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -126,9 +172,7 @@ client.on('messageCreate', async (message) => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-
     if (interaction.isStringSelectMenu() && interaction.customId === 'categoria_ticket') {
-
       const categoria = interaction.values[0];
 
       const modal = new ModalBuilder()
@@ -142,12 +186,10 @@ client.on('interactionCreate', async (interaction) => {
         .setRequired(true);
 
       modal.addComponents(new ActionRowBuilder().addComponents(input));
-
       return interaction.showModal(modal);
     }
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('form_ticket_')) {
-
       await interaction.deferReply({ ephemeral: true });
 
       const texto = interaction.fields.getTextInputValue('mensagem');
@@ -155,7 +197,6 @@ client.on('interactionCreate', async (interaction) => {
 
       db.ticketCount++;
       const ticketId = db.ticketCount;
-
       salvarDB();
 
       const categoriaTickets = interaction.guild.channels.cache.find(
@@ -251,21 +292,14 @@ client.on('interactionCreate', async (interaction) => {
         content: `<@${interaction.user.id}>`,
         embeds: [embed],
         components: [
-          new ActionRowBuilder().addComponents(
-            assumir,
-            pagamento,
-            fechar
-          )
+          new ActionRowBuilder().addComponents(assumir, pagamento, fechar)
         ]
       });
 
-      return interaction.editReply(
-        `✅ Ticket criado com sucesso: ${canal}`
-      );
+      return interaction.editReply(`✅ Ticket criado com sucesso: ${canal}`);
     }
 
     if (interaction.isButton() && interaction.customId === 'assumir_ticket') {
-
       if (!temCargoPermitido(interaction.member)) {
         return interaction.reply({
           content: '❌ Você não tem permissão para assumir este ticket.',
@@ -286,7 +320,6 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.isButton() && interaction.customId === 'gerar_pagamento') {
-
       if (!temCargoPermitido(interaction.member)) {
         return interaction.reply({
           content: '❌ Você não tem permissão para gerar pagamento.',
@@ -308,15 +341,12 @@ client.on('interactionCreate', async (interaction) => {
 
       return interaction.reply({
         content: '🛒 Escolha o produto para gerar o pagamento:',
-        components: [
-          new ActionRowBuilder().addComponents(menu)
-        ],
+        components: [new ActionRowBuilder().addComponents(menu)],
         ephemeral: true
       });
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'selecionar_produto') {
-
       if (!temCargoPermitido(interaction.member)) {
         return interaction.reply({
           content: '❌ Sem permissão.',
@@ -337,15 +367,12 @@ client.on('interactionCreate', async (interaction) => {
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
 
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(input)
-      );
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
 
       return interaction.showModal(modal);
     }
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_quantidade_')) {
-
       await interaction.deferReply({ ephemeral: true });
 
       if (!temCargoPermitido(interaction.member)) {
@@ -353,14 +380,10 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       const produtoId = interaction.customId.replace('modal_quantidade_', '');
-      const quantidade = Number(
-        interaction.fields.getTextInputValue('quantidade')
-      );
+      const quantidade = Number(interaction.fields.getTextInputValue('quantidade'));
 
       if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 50) {
-        return interaction.editReply(
-          '❌ A quantidade precisa ser um número de 1 até 50.'
-        );
+        return interaction.editReply('❌ A quantidade precisa ser um número de 1 até 50.');
       }
 
       const produto = produtos[produtoId];
@@ -379,6 +402,20 @@ client.on('interactionCreate', async (interaction) => {
         salvarDB();
       }
 
+      const pixCopiaECola = gerarPixCopiaECola({
+        chave: chavePix,
+        nome: nomePix,
+        cidade: 'SAO PAULO',
+        valor: total,
+        txid: `TICKET${dados ? dados.id : Date.now()}`
+      });
+
+      const qrBuffer = await QRCode.toBuffer(pixCopiaECola);
+
+      const qrCode = new AttachmentBuilder(qrBuffer, {
+        name: 'qrcode-pix.png'
+      });
+
       const embed = new EmbedBuilder()
         .setTitle('💳 Pagamento Gerado')
         .setDescription(
@@ -386,16 +423,17 @@ client.on('interactionCreate', async (interaction) => {
           `🔢 **Quantidade:** ${quantidade}\n` +
           `💰 **Valor total:** ${formatarDinheiro(total)}\n\n` +
           `👤 **Nome no Pix:** ${nomePix}\n` +
-          `🔑 **Chave Pix:**\n\`\`\`${chavePix}\`\`\`\n` +
+          `🔑 **Pix Copia e Cola:**\n\`\`\`${pixCopiaECola}\`\`\`\n` +
           `🟡 **Status:** Aguardando pagamento\n\n` +
-          `Depois de pagar, clique em **✅ Já paguei**.`
+          `Escaneie o QR Code abaixo ou copie o Pix. Depois clique em **✅ Já paguei**.`
         )
+        .setImage('attachment://qrcode-pix.png')
         .setColor('#8A2BE2')
         .setThumbnail(logoLink);
 
       const copiar = new ButtonBuilder()
         .setCustomId('copiar_pix')
-        .setLabel('📋 Ver chave Pix')
+        .setLabel('📋 Ver Pix Copia e Cola')
         .setStyle(ButtonStyle.Secondary);
 
       const jaPaguei = new ButtonBuilder()
@@ -410,32 +448,26 @@ client.on('interactionCreate', async (interaction) => {
 
       await interaction.channel.send({
         embeds: [embed],
+        files: [qrCode],
         components: [
-          new ActionRowBuilder().addComponents(
-            copiar,
-            jaPaguei,
-            confirmar
-          )
+          new ActionRowBuilder().addComponents(copiar, jaPaguei, confirmar)
         ]
       });
 
-      return interaction.editReply(
-        '✅ Pagamento enviado no ticket.'
-      );
+      return interaction.editReply('✅ Pagamento com QR Code enviado no ticket.');
     }
 
     if (interaction.isButton() && interaction.customId === 'copiar_pix') {
-
       return interaction.reply({
         content:
-          `🔑 **Chave Pix:**\n\`\`\`${chavePix}\`\`\`\n` +
-          `👤 Nome: **${nomePix}**`,
+          `🔑 **Pix Copia e Cola:**\n\`\`\`Use o QR Code acima para pagar com valor automático.\`\`\`\n` +
+          `👤 Nome: **${nomePix}**\n` +
+          `🔑 Chave Pix: **${chavePix}**`,
         ephemeral: true
       });
     }
 
     if (interaction.isButton() && interaction.customId === 'ja_paguei') {
-
       const dados = db.tickets[interaction.channel.id];
 
       if (dados && interaction.user.id !== dados.usuarioId) {
@@ -451,13 +483,11 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       return interaction.reply({
-        content:
-          '🟡 Pagamento marcado como enviado. Aguardando verificação da equipe.'
+        content: '🟡 Pagamento marcado como enviado. Aguardando verificação da equipe.'
       });
     }
 
     if (interaction.isButton() && interaction.customId === 'confirmar_pagamento') {
-
       if (!temCargoPermitido(interaction.member)) {
         return interaction.reply({
           content: '❌ Você não tem permissão para confirmar pagamento.',
@@ -481,14 +511,11 @@ client.on('interactionCreate', async (interaction) => {
         content:
           `🟢 Pagamento confirmado por ${interaction.user}.\n` +
           `Pedido pronto para ir para produção.`,
-        components: [
-          new ActionRowBuilder().addComponents(producao)
-        ]
+        components: [new ActionRowBuilder().addComponents(producao)]
       });
     }
 
     if (interaction.isButton() && interaction.customId === 'em_producao') {
-
       if (!temCargoPermitido(interaction.member)) {
         return interaction.reply({
           content: '❌ Sem permissão.',
@@ -502,16 +529,12 @@ client.on('interactionCreate', async (interaction) => {
         .setStyle(ButtonStyle.Success);
 
       return interaction.reply({
-        content:
-          `🔵 Pedido colocado em produção por ${interaction.user}.`,
-        components: [
-          new ActionRowBuilder().addComponents(entregue)
-        ]
+        content: `🔵 Pedido colocado em produção por ${interaction.user}.`,
+        components: [new ActionRowBuilder().addComponents(entregue)]
       });
     }
 
     if (interaction.isButton() && interaction.customId === 'pedido_entregue') {
-
       if (!temCargoPermitido(interaction.member)) {
         return interaction.reply({
           content: '❌ Sem permissão.',
@@ -525,16 +548,12 @@ client.on('interactionCreate', async (interaction) => {
         .setStyle(ButtonStyle.Success);
 
       return interaction.reply({
-        content:
-          '✅ Pedido entregue! Cliente, clique abaixo para avaliar o atendimento.',
-        components: [
-          new ActionRowBuilder().addComponents(avaliar)
-        ]
+        content: '✅ Pedido entregue! Cliente, clique abaixo para avaliar o atendimento.',
+        components: [new ActionRowBuilder().addComponents(avaliar)]
       });
     }
 
     if (interaction.isButton() && interaction.customId === 'avaliar_atendimento') {
-
       const dados = db.tickets[interaction.channel.id];
 
       if (dados && interaction.user.id !== dados.usuarioId) {
@@ -569,7 +588,6 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.isModalSubmit() && interaction.customId === 'modal_avaliacao') {
-
       await interaction.deferReply({ ephemeral: true });
 
       const estrelas = interaction.fields.getTextInputValue('estrelas');
@@ -578,20 +596,14 @@ client.on('interactionCreate', async (interaction) => {
       const numeroEstrelas = Number(estrelas);
 
       if (!Number.isInteger(numeroEstrelas) || numeroEstrelas < 1 || numeroEstrelas > 5) {
-        return interaction.editReply(
-          '❌ Coloque uma nota de 1 até 5.'
-        );
+        return interaction.editReply('❌ Coloque uma nota de 1 até 5.');
       }
 
       const dados = db.tickets[interaction.channel.id];
 
-      const canalFeedbacks = acharCanal(
-        interaction.guild,
-        canalFeedbacksNome
-      );
+      const canalFeedbacks = acharCanal(interaction.guild, canalFeedbacksNome);
 
       if (canalFeedbacks) {
-
         const embed = new EmbedBuilder()
           .setTitle('✅ Novo Feedback')
           .setDescription(
@@ -604,18 +616,13 @@ client.on('interactionCreate', async (interaction) => {
           .setThumbnail(logoLink)
           .setTimestamp();
 
-        await canalFeedbacks.send({
-          embeds: [embed]
-        });
+        await canalFeedbacks.send({ embeds: [embed] });
       }
 
-      return interaction.editReply(
-        '✅ Obrigado pelo feedback!'
-      );
+      return interaction.editReply('✅ Obrigado pelo feedback!');
     }
 
     if (interaction.isButton() && interaction.customId === 'fechar_ticket') {
-
       if (!temCargoPermitido(interaction.member)) {
         return interaction.reply({
           content: '❌ Você não tem permissão para finalizar este ticket.',
@@ -642,22 +649,16 @@ client.on('interactionCreate', async (interaction) => {
 
       const arquivo = new AttachmentBuilder(
         Buffer.from(historico || 'Sem mensagens salvas.', 'utf8'),
-        {
-          name: `historico-ticket-${dados ? dados.id : 'sem-id'}.txt`
-        }
+        { name: `historico-ticket-${dados ? dados.id : 'sem-id'}.txt` }
       );
 
       const tempoAtendimento = dados
         ? formatarTempo(Date.now() - dados.abertoEm)
         : 'Não registrado';
 
-      const logChannel = acharCanal(
-        interaction.guild,
-        canalLogsNome
-      );
+      const logChannel = acharCanal(interaction.guild, canalLogsNome);
 
       if (logChannel) {
-
         const logEmbed = new EmbedBuilder()
           .setTitle(`📁 Ticket Finalizado #${dados ? dados.id : 'sem-id'}`)
           .setDescription(
@@ -695,21 +696,13 @@ client.on('interactionCreate', async (interaction) => {
         interaction.channel.delete().catch(() => {});
       }, 3000);
     }
-
   } catch (erro) {
-
     console.log('Erro em interação:', erro);
 
     if (interaction.isRepliable()) {
-
       if (interaction.deferred || interaction.replied) {
-
-        interaction.editReply(
-          '❌ Ocorreu um erro ao processar isso.'
-        ).catch(() => {});
-
+        interaction.editReply('❌ Ocorreu um erro ao processar isso.').catch(() => {});
       } else {
-
         interaction.reply({
           content: '❌ Ocorreu um erro ao processar isso.',
           ephemeral: true
