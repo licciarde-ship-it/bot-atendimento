@@ -119,6 +119,73 @@ function gerarPixCopiaECola({ chave, nome, cidade, valor, txid }) {
   return payloadSemCRC + crc16(payloadSemCRC);
 }
 
+async function enviarPagamentoPix(interaction, { descricao, quantidade, total, titulo = '💳 Pagamento Gerado' }) {
+  const dados = db.tickets[interaction.channel.id];
+
+  if (dados) {
+    dados.pagamento = {
+      produto: descricao,
+      quantidade,
+      total,
+      status: 'Aguardando pagamento'
+    };
+
+    salvarDB();
+  }
+
+  const pixCopiaECola = gerarPixCopiaECola({
+    chave: chavePix,
+    nome: nomePix,
+    cidade: 'SAO PAULO',
+    valor: total,
+    txid: `TICKET${dados ? dados.id : Date.now()}`
+  });
+
+  const qrBuffer = await QRCode.toBuffer(pixCopiaECola);
+
+  const qrCode = new AttachmentBuilder(qrBuffer, {
+    name: 'qrcode-pix.png'
+  });
+
+  const embed = new EmbedBuilder()
+    .setTitle(titulo)
+    .setDescription(
+      `🛒 **Pedido:** ${descricao}\n` +
+      `🔢 **Quantidade:** ${quantidade}\n` +
+      `💰 **Valor total:** ${formatarDinheiro(total)}\n\n` +
+      `👤 **Nome no Pix:** ${nomePix}\n` +
+      `🔑 **Pix Copia e Cola:**\n\`\`\`${pixCopiaECola}\`\`\`\n` +
+      `🟡 **Status:** Aguardando pagamento\n\n` +
+      `Escaneie o QR Code abaixo ou copie o Pix. Depois clique em **✅ Já paguei**.`
+    )
+    .setImage('attachment://qrcode-pix.png')
+    .setColor('#8A2BE2')
+    .setThumbnail(logoLink);
+
+  const copiar = new ButtonBuilder()
+    .setCustomId('copiar_pix')
+    .setLabel('📋 Ver Pix Copia e Cola')
+    .setStyle(ButtonStyle.Secondary);
+
+  const jaPaguei = new ButtonBuilder()
+    .setCustomId('ja_paguei')
+    .setLabel('✅ Já paguei')
+    .setStyle(ButtonStyle.Success);
+
+  const confirmar = new ButtonBuilder()
+    .setCustomId('confirmar_pagamento')
+    .setLabel('🟢 Confirmar Pagamento')
+    .setStyle(ButtonStyle.Primary);
+
+  await interaction.channel.send({
+    embeds: [embed],
+    files: [qrCode],
+    components: [
+      new ActionRowBuilder().addComponents(copiar, jaPaguei, confirmar)
+    ]
+  });
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -336,7 +403,8 @@ client.on('interactionCreate', async (interaction) => {
           { label: '🩳 Shorts — R$ 25,00', value: 'shorts' },
           { label: '📿 Cordão — R$ 29,99', value: 'cordao' },
           { label: '🧤 Manguito — R$ 25,00', value: 'manguito' },
-          { label: '🔥 Kit FAC — R$ 569,99', value: 'kit_fac' }
+          { label: '🔥 Kit FAC — R$ 569,99', value: 'kit_fac' },
+          { label: '💰 Personalizado — escolher valor', value: 'personalizado' }
         ]);
 
       return interaction.reply({
@@ -356,6 +424,33 @@ client.on('interactionCreate', async (interaction) => {
 
       const produtoId = interaction.values[0];
 
+      if (produtoId === 'personalizado') {
+        const modal = new ModalBuilder()
+          .setCustomId('modal_pagamento_personalizado')
+          .setTitle('Pagamento Personalizado');
+
+        const descricao = new TextInputBuilder()
+          .setCustomId('descricao')
+          .setLabel('Descrição do pedido')
+          .setPlaceholder('Exemplo: Combo especial, roupa extra, taxa etc.')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        const valor = new TextInputBuilder()
+          .setCustomId('valor')
+          .setLabel('Valor do pagamento')
+          .setPlaceholder('Exemplo: 120,50')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(descricao),
+          new ActionRowBuilder().addComponents(valor)
+        );
+
+        return interaction.showModal(modal);
+      }
+
       const modal = new ModalBuilder()
         .setCustomId(`modal_quantidade_${produtoId}`)
         .setTitle('Quantidade do pedido');
@@ -370,6 +465,31 @@ client.on('interactionCreate', async (interaction) => {
       modal.addComponents(new ActionRowBuilder().addComponents(input));
 
       return interaction.showModal(modal);
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === 'modal_pagamento_personalizado') {
+      await interaction.deferReply({ ephemeral: true });
+
+      if (!temCargoPermitido(interaction.member)) {
+        return interaction.editReply('❌ Sem permissão.');
+      }
+
+      const descricao = interaction.fields.getTextInputValue('descricao');
+      const valorTexto = interaction.fields.getTextInputValue('valor').replace(',', '.');
+      const total = Number(valorTexto);
+
+      if (isNaN(total) || total <= 0) {
+        return interaction.editReply('❌ Coloque um valor válido. Exemplo: 120,50');
+      }
+
+      await enviarPagamentoPix(interaction, {
+        descricao,
+        quantidade: 1,
+        total,
+        titulo: '💳 Pagamento Personalizado'
+      });
+
+      return interaction.editReply('✅ Pagamento personalizado com QR Code enviado no ticket.');
     }
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_quantidade_')) {
@@ -389,69 +509,11 @@ client.on('interactionCreate', async (interaction) => {
       const produto = produtos[produtoId];
       const total = produto.preco * quantidade;
 
-      const dados = db.tickets[interaction.channel.id];
-
-      if (dados) {
-        dados.pagamento = {
-          produto: produto.nome,
-          quantidade,
-          total,
-          status: 'Aguardando pagamento'
-        };
-
-        salvarDB();
-      }
-
-      const pixCopiaECola = gerarPixCopiaECola({
-        chave: chavePix,
-        nome: nomePix,
-        cidade: 'SAO PAULO',
-        valor: total,
-        txid: `TICKET${dados ? dados.id : Date.now()}`
-      });
-
-      const qrBuffer = await QRCode.toBuffer(pixCopiaECola);
-
-      const qrCode = new AttachmentBuilder(qrBuffer, {
-        name: 'qrcode-pix.png'
-      });
-
-      const embed = new EmbedBuilder()
-        .setTitle('💳 Pagamento Gerado')
-        .setDescription(
-          `🛒 **Produto:** ${produto.nome}\n` +
-          `🔢 **Quantidade:** ${quantidade}\n` +
-          `💰 **Valor total:** ${formatarDinheiro(total)}\n\n` +
-          `👤 **Nome no Pix:** ${nomePix}\n` +
-          `🔑 **Pix Copia e Cola:**\n\`\`\`${pixCopiaECola}\`\`\`\n` +
-          `🟡 **Status:** Aguardando pagamento\n\n` +
-          `Escaneie o QR Code abaixo ou copie o Pix. Depois clique em **✅ Já paguei**.`
-        )
-        .setImage('attachment://qrcode-pix.png')
-        .setColor('#8A2BE2')
-        .setThumbnail(logoLink);
-
-      const copiar = new ButtonBuilder()
-        .setCustomId('copiar_pix')
-        .setLabel('📋 Ver Pix Copia e Cola')
-        .setStyle(ButtonStyle.Secondary);
-
-      const jaPaguei = new ButtonBuilder()
-        .setCustomId('ja_paguei')
-        .setLabel('✅ Já paguei')
-        .setStyle(ButtonStyle.Success);
-
-      const confirmar = new ButtonBuilder()
-        .setCustomId('confirmar_pagamento')
-        .setLabel('🟢 Confirmar Pagamento')
-        .setStyle(ButtonStyle.Primary);
-
-      await interaction.channel.send({
-        embeds: [embed],
-        files: [qrCode],
-        components: [
-          new ActionRowBuilder().addComponents(copiar, jaPaguei, confirmar)
-        ]
+      await enviarPagamentoPix(interaction, {
+        descricao: produto.nome,
+        quantidade,
+        total,
+        titulo: '💳 Pagamento Gerado'
       });
 
       return interaction.editReply('✅ Pagamento com QR Code enviado no ticket.');
