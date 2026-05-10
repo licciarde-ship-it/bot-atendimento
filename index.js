@@ -20,6 +20,9 @@ const QRCode = require('qrcode');
 const cargosPermitidos = ['👑 Dono', '💰 Vendedor', '🔥 Top Vendedor'];
 
 const categoriaTicketsNome = 'Tickets';
+const categoriaProducaoNome = '🛠️-em-producao';
+const categoriaEntreguesNome = '✅-ja-feitas';
+
 const canalLogsNome = 'logs-tickets';
 const canalFeedbacksNome = '✅・feedback';
 
@@ -54,6 +57,12 @@ function normalizar(texto) {
 
 function acharCanal(guild, nome) {
   return guild.channels.cache.find(c => normalizar(c.name) === normalizar(nome));
+}
+
+function acharCategoria(guild, nome) {
+  return guild.channels.cache.find(
+    c => normalizar(c.name) === normalizar(nome) && c.type === ChannelType.GuildCategory
+  );
 }
 
 function temCargoPermitido(membro) {
@@ -117,6 +126,17 @@ function gerarPixCopiaECola({ chave, nome, cidade, valor, txid }) {
     '6304';
 
   return payloadSemCRC + crc16(payloadSemCRC);
+}
+
+async function moverParaCategoria(canal, nomeCategoria) {
+  const categoria = acharCategoria(canal.guild, nomeCategoria);
+
+  if (!categoria) {
+    return false;
+  }
+
+  await canal.setParent(categoria.id, { lockPermissions: false });
+  return true;
 }
 
 async function enviarPagamentoPix(interaction, { descricao, quantidade, total, titulo = '💳 Pagamento Gerado' }) {
@@ -266,11 +286,7 @@ client.on('interactionCreate', async (interaction) => {
       const ticketId = db.ticketCount;
       salvarDB();
 
-      const categoriaTickets = interaction.guild.channels.cache.find(
-        canal =>
-          normalizar(canal.name) === normalizar(categoriaTicketsNome) &&
-          canal.type === ChannelType.GuildCategory
-      );
+      const categoriaTickets = acharCategoria(interaction.guild, categoriaTicketsNome);
 
       const canal = await interaction.guild.channels.create({
         name: `ticket-${ticketId}-${categoria}`,
@@ -585,13 +601,17 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
+      const movido = await moverParaCategoria(interaction.channel, categoriaProducaoNome);
+
       const entregue = new ButtonBuilder()
         .setCustomId('pedido_entregue')
         .setLabel('✅ Pedido Entregue')
         .setStyle(ButtonStyle.Success);
 
       return interaction.reply({
-        content: `🔵 Pedido colocado em produção por ${interaction.user}.`,
+        content: movido
+          ? `🔵 Pedido colocado em produção por ${interaction.user}. O ticket foi movido para **${categoriaProducaoNome}**.`
+          : `🔵 Pedido colocado em produção por ${interaction.user}, mas não encontrei a categoria **${categoriaProducaoNome}**.`,
         components: [new ActionRowBuilder().addComponents(entregue)]
       });
     }
@@ -604,13 +624,17 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
+      const movido = await moverParaCategoria(interaction.channel, categoriaEntreguesNome);
+
       const avaliar = new ButtonBuilder()
         .setCustomId('avaliar_atendimento')
         .setLabel('⭐ Avaliar Atendimento')
         .setStyle(ButtonStyle.Success);
 
       return interaction.reply({
-        content: '✅ Pedido entregue! Cliente, clique abaixo para avaliar o atendimento.',
+        content: movido
+          ? `✅ Pedido entregue! O ticket foi movido para **${categoriaEntreguesNome}**. Cliente, clique abaixo para avaliar o atendimento.`
+          : `✅ Pedido entregue! Não encontrei a categoria **${categoriaEntreguesNome}**. Cliente, clique abaixo para avaliar o atendimento.`,
         components: [new ActionRowBuilder().addComponents(avaliar)]
       });
     }
